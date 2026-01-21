@@ -19,6 +19,7 @@
 
 import { gql } from "graphql-request";
 import { revalidatePath } from "next/cache";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { hasuraClient } from "../../../lib/hasura";
@@ -275,22 +276,41 @@ export default async function AdminChatbotsPage() {
 												textAlign: "right",
 											}}
 										>
-											<form action={deleteChatbot}>
-												<input type="hidden" name="id" value={bot.id} />
-												<button
-													type="submit"
+											<div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+												<Link
+													href={`/admin/chatbots/${bot.id}/faqs`}
 													style={{
-														background: "#fee2e2",
-														color: "#991b1b",
-														border: "1px solid #fecaca",
+														display: "inline-block",
+														background: "#dbeafe",
+														color: "#1d4ed8",
+														border: "1px solid #bfdbfe",
 														borderRadius: 10,
 														padding: "8px 10px",
-														cursor: "pointer",
+														textDecoration: "none",
+														fontSize: 14,
+														fontWeight: 600,
 													}}
 												>
-													Delete
-												</button>
-											</form>
+													FAQs
+												</Link>
+
+												<form action={deleteChatbot}>
+													<input type="hidden" name="id" value={bot.id} />
+													<button
+														type="submit"
+														style={{
+															background: "#fee2e2",
+															color: "#991b1b",
+															border: "1px solid #fecaca",
+															borderRadius: 10,
+															padding: "8px 10px",
+															cursor: "pointer",
+													}}
+													>
+														Delete
+													</button>
+												</form>
+											</div>
 										</td>
 									</tr>
 								))}
