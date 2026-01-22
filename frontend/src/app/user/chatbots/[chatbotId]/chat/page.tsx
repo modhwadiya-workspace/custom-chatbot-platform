@@ -14,7 +14,7 @@
  * - Chat priority:
  *   1. FAQ (exact match on question)
  *   2. Workflow (match userMessage in workflow JSON)
- *   3. RAG (NOT implemented yet)
+ *   3. RAG (fallback)
  *
  * UI Requirements:
  * - Chat-style UI (user on right, bot on left)
@@ -37,7 +37,6 @@
  *
  * Constraints:
  * - Do NOT create API routes
- * - Do NOT implement RAG yet (placeholder only)
  * - Keep code readable and functional
  */
 
@@ -90,9 +89,15 @@ type UiOption = {
 
 type UiMessage = {
 	id: string;
-	sender: "user" | "bot";
+	sender: "user" | "assistant";
 	message: string;
 	options?: UiOption[];
+	ephemeral?: boolean;
+};
+
+type ChatHistoryItem = {
+	role: "user" | "assistant";
+	content: string;
 };
 
 const CREATE_SESSION_MUTATION = gql`
@@ -139,6 +144,21 @@ function normalize(text: string): string {
 	return String(text ?? "").trim().toLowerCase();
 }
 
+function buildChatHistoryFromMessages(allMessages: UiMessage[], maxItems: number): ChatHistoryItem[] {
+	const normalizedMax = Math.max(0, Math.min(50, Math.floor(maxItems || 0)));
+	if (normalizedMax === 0) return [];
+
+	const history: ChatHistoryItem[] = [];
+	for (const m of allMessages) {
+		if (m.ephemeral) continue;
+		const content = String(m.message ?? "").trim();
+		if (!content) continue;
+		history.push({ role: m.sender === "user" ? "user" : "assistant", content });
+	}
+
+	return history.slice(-normalizedMax);
+}
+
 export default function UserChatPage() {
 	const params = useParams();
 	const chatbotId = params.chatbotId as string;
@@ -154,6 +174,18 @@ export default function UserChatPage() {
 
 	const [messages, setMessages] = useState<UiMessage[]>([]);
 	const [input, setInput] = useState("");
+
+	const messagesRef = useRef<UiMessage[]>([]);
+	useEffect(() => {
+		messagesRef.current = messages;
+	}, [messages]);
+
+	const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+	useEffect(() => {
+		const el = messagesScrollRef.current;
+		if (!el) return;
+		el.scrollTop = el.scrollHeight;
+	}, [messages]);
 
 	const workflowNodesByUserMessage = useMemo(() => {
 		const map = new Map<string, WorkflowJson["nodes"][number]>();
@@ -246,11 +278,11 @@ export default function UserChatPage() {
 	}, [chatbotId, persistMessage]);
 
 	const computeBotReply = useCallback(
-		(userText: string): { reply: string; options: UiOption[] } => {
+		(userText: string): { reply: string; options: UiOption[]; source: "faq" | "workflow" | "rag" } => {
 			const normalized = normalize(userText);
 			const faq = faqs.find((f) => normalize(f.question) === normalized);
 			if (faq) {
-				return { reply: faq.answer ?? "", options: [] };
+				return { reply: faq.answer ?? "", options: [], source: "faq" };
 			}
 
 			const node = workflowNodesByUserMessage.get(normalized) ?? null;
@@ -261,16 +293,54 @@ export default function UserChatPage() {
 					.map((target) => ({ label: target.userMessage ?? "", value: target.userMessage ?? "" }))
 					.filter((o) => Boolean(normalize(o.value)));
 
-				return { reply: node.botReply ?? "", options };
+				return { reply: node.botReply ?? "", options, source: "workflow" };
 			}
 
-			return {
-				reply: "(RAG coming soon) I don’t have an answer for that yet.",
-				options: [],
-			};
+			return { reply: "", options: [], source: "rag" };
 		},
 		[faqs, workflowNodesById, workflowNodesByUserMessage]
 	);
+
+	type RagSource = { text: string; score: number; filename: string };
+
+	const callRag = useCallback(
+  async (payload: {
+    chatbot_id: string;
+    user_message: string;
+    chat_history: ChatHistoryItem[];
+  }) => {
+    // 🔥 IMPORTANT: explicit backend URL
+    const url = `http://localhost:8000/chat/rag?chatbot_id=${encodeURIComponent(
+      payload.chatbot_id
+    )}&user_message=${encodeURIComponent(payload.user_message)}`;
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload.chat_history ?? []),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`RAG failed (${res.status}): ${text}`);
+    }
+
+    const data = await res.json();
+
+    if (typeof data?.answer !== "string") {
+      throw new Error("Invalid RAG response");
+    }
+
+    return {
+      answer: data.answer,
+      sources: Array.isArray(data.sources) ? data.sources : [],
+    };
+  },
+  []
+);
+
 
 	const sendUserMessage = useCallback(
 		async (rawText: string) => {
@@ -293,23 +363,51 @@ export default function UserChatPage() {
 			try {
 				await persistMessage(sessionId, "user", text);
 
-				const { reply, options } = computeBotReply(text);
+				const { reply, options, source } = computeBotReply(text);
+				if (source !== "rag") {
+					const botUi: UiMessage = {
+						id: makeLocalId("bot"),
+						sender: "bot",
+						message: reply,
+						options: options.length ? options : undefined,
+					};
+
+					setMessages((prev) => [...prev, botUi]);
+					await persistMessage(sessionId, "bot", reply);
+					return;
+				}
+
+				const typingId = makeLocalId("bot-typing");
+				setMessages((prev) => [
+					...prev,
+					{ id: typingId, sender: "bot", message: "Thinking…", ephemeral: true },
+				]);
+
+				let ragReply = "";
+				try {
+					const history = buildChatHistoryFromMessages([...messagesRef.current, userUi], 8);
+					const rag = await callRag({ chatbot_id: chatbotId, user_message: text, chat_history: history });
+					ragReply = rag.answer;
+				} catch (ragErr) {
+					setError(ragErr instanceof Error ? ragErr.message : String(ragErr));
+					ragReply = "Sorry — I couldn’t find an answer right now. Please try again.";
+				}
+
 				const botUi: UiMessage = {
 					id: makeLocalId("bot"),
 					sender: "bot",
-					message: reply,
-					options: options.length ? options : undefined,
+					message: ragReply,
 				};
 
-				setMessages((prev) => [...prev, botUi]);
-				await persistMessage(sessionId, "bot", reply);
+				setMessages((prev) => [...prev.filter((m) => m.id !== typingId), botUi]);
+				await persistMessage(sessionId, "bot", ragReply);
 			} catch (e) {
 				setError(e instanceof Error ? e.message : String(e));
 			} finally {
 				setIsSending(false);
 			}
 		},
-		[computeBotReply, isSending, persistMessage, sessionId]
+		[callRag, chatbotId, computeBotReply, isSending, persistMessage, sessionId]
 	);
 
 	return (
@@ -355,10 +453,10 @@ export default function UserChatPage() {
 				}}
 			>
 				<div style={{ padding: 14, borderBottom: "1px solid #e5e7eb" }}>
-					<div style={{ fontSize: 13, color: "#6b7280" }}>FAQ → Workflow → (RAG later)</div>
+					<div style={{ fontSize: 13, color: "#6b7280" }}>FAQ → Workflow → RAG</div>
 				</div>
 
-				<div style={{ padding: 14, height: 520, overflowY: "auto", background: "#f9fafb" }}>
+				<div ref={messagesScrollRef} style={{ padding: 14, height: 520, overflowY: "auto", background: "#f9fafb" }}>
 					{messages.length === 0 ? (
 						<div style={{ color: "#6b7280" }}>No messages yet.</div>
 					) : (

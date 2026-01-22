@@ -23,6 +23,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { hasuraClient } from "../../../lib/hasura";
+import { CreateChatbotSubmitButton } from "./CreateChatbotSubmitButton";
 
 type Chatbot = {
 	id: string;
@@ -78,6 +79,8 @@ export default async function AdminChatbotsPage() {
 	async function createChatbot(formData: FormData) {
 		"use server";
 
+		const ragServiceBaseUrl = "http://localhost:8000";
+
 		const name = String(formData.get("name") ?? "").trim();
 		const startMessage = String(formData.get("start_message") ?? "").trim();
 
@@ -88,10 +91,52 @@ export default async function AdminChatbotsPage() {
 			throw new Error("Start message is required.");
 		}
 
-		await hasuraClient.request(CREATE_CHATBOT_MUTATION, {
+		const created = await hasuraClient.request<{
+			insert_chatbots_chatbots_one: { id: string } | null;
+		}>(CREATE_CHATBOT_MUTATION, {
 			name,
 			start_message: startMessage,
 		});
+
+		const chatbotId = created.insert_chatbots_chatbots_one?.id;
+		if (!chatbotId) {
+			throw new Error("Failed to create chatbot.");
+		}
+
+		const pdfValues = formData.getAll("pdfs");
+		const pdfFiles = pdfValues
+			.filter((v): v is File => v instanceof File)
+			.filter((f) => f.size > 0);
+
+		for (const pdf of pdfFiles) {
+			const uploadForm = new FormData();
+			uploadForm.append("file", pdf, pdf.name);
+			uploadForm.append("chatbot_id", chatbotId);
+
+			const uploadRes = await fetch(`${ragServiceBaseUrl}/documents/upload`, {
+				method: "POST",
+				body: uploadForm,
+			});
+
+			if (!uploadRes.ok) {
+				const msg = await uploadRes.text().catch(() => "");
+				throw new Error(
+					`PDF upload failed (${uploadRes.status} ${uploadRes.statusText})${msg ? `: ${msg}` : ""}`
+				);
+			}
+
+			const processUrl = new URL("/documents/process", ragServiceBaseUrl);
+			processUrl.searchParams.set("chatbot_id", chatbotId);
+			processUrl.searchParams.set("filename", pdf.name);
+
+			const processRes = await fetch(processUrl.toString(), { method: "POST" });
+			if (!processRes.ok) {
+				const msg = await processRes.text().catch(() => "");
+				throw new Error(
+					`PDF processing failed (${processRes.status} ${processRes.statusText})${msg ? `: ${msg}` : ""}`
+				);
+			}
+		}
 
 		revalidatePath("/admin/chatbots");
 		redirect("/admin/chatbots");
@@ -130,7 +175,11 @@ export default async function AdminChatbotsPage() {
 					Create chatbot
 				</h2>
 
-				<form action={createChatbot} style={{ display: "grid", gap: 12 }}>
+				<form
+					action={createChatbot}
+					encType="multipart/form-data"
+					style={{ display: "grid", gap: 12 }}
+				>
 					<label style={{ display: "grid", gap: 6 }}>
 						<span style={{ fontSize: 14, fontWeight: 600 }}>Name</span>
 						<input
@@ -161,20 +210,26 @@ export default async function AdminChatbotsPage() {
 						/>
 					</label>
 
-					<div>
-						<button
-							type="submit"
+					<label style={{ display: "grid", gap: 6 }}>
+						<span style={{ fontSize: 14, fontWeight: 600 }}>PDF upload</span>
+						<input
+							type="file"
+							name="pdfs"
+							accept="application/pdf"
+							multiple
 							style={{
-								background: "#111827",
-								color: "white",
-								border: 0,
+								border: "1px solid #d1d5db",
 								borderRadius: 10,
-								padding: "10px 14px",
-								cursor: "pointer",
+								padding: "10px 12px",
 							}}
-						>
-							Create
-						</button>
+						/>
+						<span style={{ fontSize: 12, color: "#6b7280" }}>
+							Upload PDF for RAG knowledge (optional)
+						</span>
+					</label>
+
+					<div>
+						<CreateChatbotSubmitButton />
 					</div>
 				</form>
 			</section>

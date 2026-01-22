@@ -1,0 +1,29 @@
+# Core API
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Object storage
+minio
+
+# OCR
+pytesseract
+pdf2image
+Pillow
+
+# Text processing
+regex
+nltk
+
+# Embeddings
+# sentence-transformers
+# torch
+
+# Vector DB
+qdrant-client==1.7.3
+
+# HTTP (for Ollama)
+requests
+
+# Utilities
+python-dotenv

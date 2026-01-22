@@ -40,8 +40,8 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123
     ports:
-      - "12000:9000"
-      - "12001:9001"
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio_data:/data
 
@@ -51,6 +51,24 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+  
+  rag-service:
+    build: ../backend/rag-service
+    container_name: rag-service
+    ports:
+      - "8000:8000"
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minio
+      MINIO_SECRET_KEY: minio123
+      MINIO_BUCKET: chatbot-docs
+    depends_on:
+      - qdrant
+      - minio
+      - ollama
+    env_file:
+      - ./rag-service/.env
+
 
 volumes:
   pg_data:
