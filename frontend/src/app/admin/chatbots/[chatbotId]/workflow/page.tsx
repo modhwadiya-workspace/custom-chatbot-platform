@@ -199,6 +199,7 @@ export default function AdminChatbotWorkflowPage() {
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+	const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 
 	const didInitialLoadRef = useRef(false);
@@ -214,6 +215,11 @@ export default function AdminChatbotWorkflowPage() {
 		if (!selectedNodeId) return null;
 		return nodes.find((n) => n.id === selectedNodeId) ?? null;
 	}, [nodes, selectedNodeId]);
+
+	const selectedEdge = useMemo(() => {
+		if (!selectedEdgeId) return null;
+		return edges.find((e) => e.id === selectedEdgeId) ?? null;
+	}, [edges, selectedEdgeId]);
 
 	const updateSelectedNodeData = useCallback(
 		(patch: Partial<FlowNodeData>) => {
@@ -337,6 +343,32 @@ export default function AdminChatbotWorkflowPage() {
 		setIsDirty(true);
 	}, [selectedNodeId, setEdges, setNodes]);
 
+	const deleteSelectedEdge = useCallback(() => {
+		if (!selectedEdgeId) return;
+		setEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
+		setSelectedEdgeId(null);
+		setIsDirty(true);
+	}, [selectedEdgeId, setEdges]);
+
+	useEffect(() => {
+		function isTypingTarget(target: EventTarget | null): boolean {
+			if (!target || !(target instanceof HTMLElement)) return false;
+			const tag = target.tagName;
+			return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
+		}
+
+		function onKeyDown(e: KeyboardEvent) {
+			if (isTypingTarget(e.target)) return;
+			if (e.key !== "Delete" && e.key !== "Backspace") return;
+			if (!selectedEdgeId) return;
+			e.preventDefault();
+			deleteSelectedEdge();
+		}
+
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [deleteSelectedEdge, selectedEdgeId]);
+
 	const saveWorkflow = useCallback(async () => {
 		setIsSaving(true);
 		setError(null);
@@ -411,7 +443,23 @@ export default function AdminChatbotWorkflowPage() {
 							cursor: !selectedNodeId || isLoading ? "not-allowed" : "pointer",
 						}}
 					>
-						Delete selected
+						Delete node
+					</button>
+
+					<button
+						type="button"
+						onClick={deleteSelectedEdge}
+						disabled={!selectedEdgeId || isLoading}
+						style={{
+							background: !selectedEdgeId || isLoading ? "#f3f4f6" : "#fee2e2",
+							color: !selectedEdgeId || isLoading ? "#6b7280" : "#991b1b",
+							border: "1px solid #e5e7eb",
+							borderRadius: 10,
+							padding: "10px 12px",
+							cursor: !selectedEdgeId || isLoading ? "not-allowed" : "pointer",
+						}}
+					>
+						Delete edge
 					</button>
 
 					<button
@@ -459,8 +507,10 @@ export default function AdminChatbotWorkflowPage() {
 						onEdgeUpdate={onEdgeUpdate}
 						defaultEdgeOptions={defaultEdgeOptions}
 						onSelectionChange={(selection) => {
-							const first = selection.nodes?.[0]?.id ?? null;
-							setSelectedNodeId(first);
+							const nodeId = selection.nodes?.[0]?.id ?? null;
+							const edgeId = selection.edges?.[0]?.id ?? null;
+							setSelectedNodeId(nodeId);
+							setSelectedEdgeId(edgeId);
 						}}
 						fitView
 					>
@@ -471,16 +521,11 @@ export default function AdminChatbotWorkflowPage() {
 				</div>
 
 				<aside style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14, background: "white" }}>
-					<div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10, color: "#111827" }}>Node editor</div>
+					<div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10, color: "#111827" }}>Editor</div>
 
-					{!selectedNode ? (
-						<div style={{ color: "#6b7280", fontSize: 14, lineHeight: 1.4 }}>
-							<div style={{ marginBottom: 8 }}>Select a node to edit its fields.</div>
-							<div style={{ marginBottom: 8 }}>Tip: click “+ Add node”, then click the node.</div>
-						</div>
-					) : (
+					{selectedNode ? (
 						<div style={{ display: "grid", gap: 10 }}>
-							<div style={{ color: "#6b7280", fontSize: 12 }}>Selected: {selectedNode.id}</div>
+							<div style={{ color: "#6b7280", fontSize: 12 }}>Selected node: {selectedNode.id}</div>
 
 							<label style={{ display: "grid", gap: 6 }}>
 								<span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>User message</span>
@@ -515,6 +560,35 @@ export default function AdminChatbotWorkflowPage() {
 							<div style={{ marginTop: 2, color: "#6b7280", fontSize: 12, lineHeight: 1.4 }}>
 								Connect nodes by dragging from the bottom handle to another node’s top handle.
 							</div>
+						</div>
+					) : selectedEdge ? (
+						<div style={{ color: "#111827", fontSize: 14, lineHeight: 1.5 }}>
+							<div style={{ color: "#6b7280", fontSize: 12, marginBottom: 8 }}>Selected edge</div>
+							<div style={{ fontSize: 13, marginBottom: 10 }}>
+								From <strong>{selectedEdge.source}</strong> → <strong>{selectedEdge.target}</strong>
+							</div>
+							<button
+								type="button"
+								onClick={deleteSelectedEdge}
+								style={{
+									background: "#fee2e2",
+									color: "#991b1b",
+									border: "1px solid #fecaca",
+									borderRadius: 10,
+									padding: "10px 12px",
+									cursor: "pointer",
+								}}
+							>
+								Delete this edge
+							</button>
+							<div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
+								Tip: you can also press Delete/Backspace.
+							</div>
+						</div>
+					) : (
+						<div style={{ color: "#6b7280", fontSize: 14, lineHeight: 1.4 }}>
+							<div style={{ marginBottom: 8 }}>Select a node (to edit) or an edge (to delete).</div>
+							<div style={{ marginBottom: 8 }}>Tip: click “+ Add node”, then click the node.</div>
 						</div>
 					)}
 				</aside>

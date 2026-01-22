@@ -294,6 +294,23 @@ export default async function AdminChatbotsPage() {
 													FAQs
 												</Link>
 
+												<Link
+													href={`/admin/chatbots/${bot.id}/workflow`}
+													style={{
+														display: "inline-block",
+														background: "#dcfce7",
+														color: "#166534",
+														border: "1px solid #bbf7d0",
+														borderRadius: 10,
+														padding: "8px 10px",
+														textDecoration: "none",
+														fontSize: 14,
+														fontWeight: 600,
+													}}
+												>
+													Workflow
+												</Link>
+
 												<form action={deleteChatbot}>
 													<input type="hidden" name="id" value={bot.id} />
 													<button
