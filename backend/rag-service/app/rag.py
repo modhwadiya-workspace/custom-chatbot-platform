@@ -23,9 +23,18 @@ def build_prompt(
         history_text += f"{role.capitalize()}: {msg['content']}\n"
 
     prompt = f"""
-You are a helpful customer-support chatbot.
-Answer ONLY using the provided context.
-If the answer is not in the context, say you don't know.
+You are a helpful AI assistant.
+
+The context documents come from PDFs uploaded by an admin and may contain any type of text
+(e.g., government documents, tenders, policies, reports, manuals, or general information).
+
+Your task is to answer the user's question strictly using the provided context.
+
+Rules:
+- Use ONLY the information present in the context documents.
+- Do NOT make assumptions or use external knowledge.
+- If the answer is not available in the context, clearly say that you do not know.
+- Keep the answer clear, concise, and accurate.
 
 Conversation history:
 {history_text}
@@ -72,13 +81,13 @@ def ask_llm(prompt: str) -> str:
                 },
             ],
             "temperature": 0.2,
-            "max_tokens": 512,   # 🔥 REQUIRED
+            "max_tokens": 512,   
         },
         timeout=120,
     )
 
     if response.status_code != 200:
-        # 🔥 VERY IMPORTANT FOR DEBUGGING
+       
         raise RuntimeError(
             f"Groq error {response.status_code}: {response.text}"
         )

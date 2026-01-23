@@ -23,7 +23,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { hasuraClient } from "../../../lib/hasura";
-import { CreateChatbotSubmitButton } from "./CreateChatbotSubmitButton";
+import { CreateChatbotForm } from "./CreateChatbotForm";
 
 type Chatbot = {
 	id: string;
@@ -56,6 +56,9 @@ const DELETE_CHATBOT_MUTATION = gql`
 		}
 	}
 `;
+
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
+const MAX_PDF_MESSAGE = "pdf must be less than 15 mb";
 
 async function fetchChatbots(): Promise<Chatbot[]> {
 	const data = await hasuraClient.request<{ chatbots_chatbots: Chatbot[] }>(
@@ -107,6 +110,10 @@ export default async function AdminChatbotsPage() {
 		const pdfFiles = pdfValues
 			.filter((v): v is File => v instanceof File)
 			.filter((f) => f.size > 0);
+
+		if (pdfFiles.some((f) => f.size > MAX_PDF_BYTES)) {
+			throw new Error(MAX_PDF_MESSAGE);
+		}
 
 		for (const pdf of pdfFiles) {
 			const uploadForm = new FormData();
@@ -175,63 +182,7 @@ export default async function AdminChatbotsPage() {
 					Create chatbot
 				</h2>
 
-				<form
-					action={createChatbot}
-					encType="multipart/form-data"
-					style={{ display: "grid", gap: 12 }}
-				>
-					<label style={{ display: "grid", gap: 6 }}>
-						<span style={{ fontSize: 14, fontWeight: 600 }}>Name</span>
-						<input
-							name="name"
-							placeholder="e.g. Support Bot"
-							required
-							style={{
-								border: "1px solid #d1d5db",
-								borderRadius: 10,
-								padding: "10px 12px",
-							}}
-						/>
-					</label>
-
-					<label style={{ display: "grid", gap: 6 }}>
-						<span style={{ fontSize: 14, fontWeight: 600 }}>Start message</span>
-						<textarea
-							name="start_message"
-							placeholder="Hi! How can I help you today?"
-							required
-							rows={3}
-							style={{
-								border: "1px solid #d1d5db",
-								borderRadius: 10,
-								padding: "10px 12px",
-								resize: "vertical",
-							}}
-						/>
-					</label>
-
-					<label style={{ display: "grid", gap: 6 }}>
-						<span style={{ fontSize: 14, fontWeight: 600 }}>PDF upload</span>
-						<input
-							type="file"
-							name="pdfs"
-							accept="application/pdf"
-							multiple
-							style={{
-								border: "1px solid #d1d5db",
-								borderRadius: 10,
-								padding: "10px 12px",
-							}}
-						/>
-						<span style={{ fontSize: 12, color: "#6b7280" }}>
-							Upload PDF for RAG knowledge (optional)
-						</span>
-					</label>
-
-					<div>
-						<CreateChatbotSubmitButton />
-					</div>
-				</form>
+				<CreateChatbotForm action={createChatbot} />
 			</section>
 
 			<section

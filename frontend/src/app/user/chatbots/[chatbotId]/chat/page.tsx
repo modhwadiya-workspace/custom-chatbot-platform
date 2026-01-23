@@ -43,9 +43,10 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { gql } from "graphql-request";
+import { ClientError } from "graphql-request";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { hasuraClient } from "../../../../../lib/hasura";
+import { clientHasuraClient } from "../../../../../lib/client";
 
 type Chatbot = {
 	id: string;
@@ -76,10 +77,16 @@ type WorkflowRow = {
 
 type ChatSessionRow = {
 	id: string;
+	chatbot_id: string;
+	created_at: string;
 };
 
 type ChatMessageRow = {
 	id: string;
+	session_id: string;
+	sender: "user" | "bot";
+	message: string;
+	created_at: string;
 };
 
 type UiOption = {
@@ -89,7 +96,7 @@ type UiOption = {
 
 type UiMessage = {
 	id: string;
-	sender: "user" | "assistant";
+	sender: "user" | "bot";
 	message: string;
 	options?: UiOption[];
 	ephemeral?: boolean;
@@ -159,6 +166,25 @@ function buildChatHistoryFromMessages(allMessages: UiMessage[], maxItems: number
 	return history.slice(-normalizedMax);
 }
 
+function formatHasuraError(err: unknown): string {
+	if (err instanceof ClientError) {
+		const gqlMessages = (err.response.errors ?? [])
+			.map((e) => e.message)
+			.filter(Boolean)
+			.join(" | ");
+		return gqlMessages || err.message;
+	}
+	return err instanceof Error ? err.message : String(err);
+}
+
+function isUnknownFieldError(err: unknown): boolean {
+	if (!(err instanceof ClientError)) return false;
+	const text = String(err.message || "");
+	const gqlMessages = (err.response.errors ?? []).map((e) => e.message).join(" | ");
+	const combined = `${text} | ${gqlMessages}`.toLowerCase();
+	return combined.includes("cannot query field") || combined.includes("field") && combined.includes("not found");
+}
+
 export default function UserChatPage() {
 	const params = useParams();
 	const chatbotId = params.chatbotId as string;
@@ -204,12 +230,28 @@ export default function UserChatPage() {
 	}, [workflowJson]);
 
 	const didInitRef = useRef(false);
+	const sessionIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		sessionIdRef.current = sessionId;
+	}, [sessionId]);
+
+	const createSession = useCallback(async (cId: string): Promise<string> => {
+		const created = await clientHasuraClient.request<{ insert_chatbots_chat_sessions_one: ChatSessionRow | null }>(
+			CREATE_SESSION_MUTATION,
+			{ chatbotId: cId }
+		);
+		const newSessionId = created.insert_chatbots_chat_sessions_one?.id;
+		if (!newSessionId) throw new Error("Failed to create chat session");
+		return newSessionId;
+	}, []);
 
 	const persistMessage = useCallback(async (sId: string, sender: "user" | "bot", message: string) => {
-		await hasuraClient.request<{ insert_chatbots_chat_messages_one: ChatMessageRow }>(INSERT_MESSAGE_MUTATION, {
+		const trimmed = String(message ?? "").trim();
+		if (!trimmed) return;
+		await clientHasuraClient.request<{ insert_chatbots_chat_messages_one: ChatMessageRow }>(INSERT_MESSAGE_MUTATION, {
 			sessionId: sId,
 			sender,
-			message,
+			message: trimmed,
 		});
 	}, []);
 
@@ -217,65 +259,44 @@ export default function UserChatPage() {
 		let isCancelled = false;
 
 		async function init() {
-			if (!chatbotId) {
-				setIsLoading(false);
-				setError("Chatbot id is missing in route params");
-				return;
-			}
+  if (didInitRef.current) return;
 
-			setIsLoading(true);
-			setError(null);
-			setMessages([]);
-			setInput("");
-			setSessionId(null);
-			setChatbot(null);
-			setFaqs([]);
-			setWorkflowJson(null);
-			didInitRef.current = false;
+  try {
+    const newSessionId = await createSession(chatbotId);
 
-			try {
-				const created = await hasuraClient.request<{ insert_chatbots_chat_sessions_one: ChatSessionRow }>(
-					CREATE_SESSION_MUTATION,
-					{ chatbotId }
-				);
-				const newSessionId = created.insert_chatbots_chat_sessions_one?.id;
-				if (!newSessionId) throw new Error("Failed to create chat session");
+    const data = await clientHasuraClient.request<{
+  chatbots_chatbots_by_pk: Chatbot | null;
+  chatbots_faqs: Faq[];
+  chatbots_workflows: WorkflowRow[];
+}>(GET_CHATBOT_FAQS_WORKFLOW_QUERY, { chatbotId });
 
-				const data = await hasuraClient.request<{
-					chatbots_chatbots_by_pk: Chatbot | null;
-					chatbots_faqs: Faq[];
-					chatbots_workflows: WorkflowRow[];
-				}>(GET_CHATBOT_FAQS_WORKFLOW_QUERY, { chatbotId });
+    setSessionId(newSessionId);
+    setChatbot(data.chatbots_chatbots_by_pk);
+    setFaqs(data.chatbots_faqs ?? []);
+    setWorkflowJson(data.chatbots_workflows?.[0]?.flow_json ?? null);
 
-				if (isCancelled) return;
-				setSessionId(newSessionId);
-				setChatbot(data.chatbots_chatbots_by_pk);
-				setFaqs(data.chatbots_faqs ?? []);
-				setWorkflowJson(data.chatbots_workflows?.[0]?.flow_json ?? null);
+    const firstBotMessage =
+      data.chatbots_chatbots_by_pk?.start_message ||
+      "Hi! How can I help you today?";
 
-				const startMessage = data.chatbots_chatbots_by_pk?.start_message ?? "";
-				const firstBotMessage = startMessage || "Hi! How can I help you today?";
-				const uiMsg: UiMessage = {
-					id: makeLocalId("bot"),
-					sender: "bot",
-					message: firstBotMessage,
-				};
-				setMessages([uiMsg]);
-				await persistMessage(newSessionId, "bot", firstBotMessage);
-				didInitRef.current = true;
-			} catch (e) {
-				if (isCancelled) return;
-				setError(e instanceof Error ? e.message : String(e));
-			} finally {
-				if (!isCancelled) setIsLoading(false);
-			}
-		}
+    setMessages([
+      { id: makeLocalId("bot"), sender: "bot", message: firstBotMessage },
+    ]);
+
+    await persistMessage(newSessionId, "bot", firstBotMessage);
+
+    // ✅ ONLY HERE
+    didInitRef.current = true;
+  } finally {
+    setIsLoading(false);
+  }
+}
 
 		init();
 		return () => {
 			isCancelled = true;
 		};
-	}, [chatbotId, persistMessage]);
+	}, [chatbotId, createSession, persistMessage]);
 
 	const computeBotReply = useCallback(
 		(userText: string): { reply: string; options: UiOption[]; source: "faq" | "workflow" | "rag" } => {
@@ -346,7 +367,13 @@ export default function UserChatPage() {
 		async (rawText: string) => {
 			const text = String(rawText ?? "").trim();
 			if (!text) return;
-			if (!sessionId) return;
+			if (!sessionIdRef.current) {
+  				setError("Session not ready yet");
+  				return;
+			}
+
+			const effectiveSessionId = sessionIdRef.current;
+			if (!effectiveSessionId) return;
 			if (isSending) return;
 
 			setIsSending(true);
@@ -361,7 +388,7 @@ export default function UserChatPage() {
 			setMessages((prev) => [...prev, userUi]);
 
 			try {
-				await persistMessage(sessionId, "user", text);
+				await persistMessage(effectiveSessionId, "user", text);
 
 				const { reply, options, source } = computeBotReply(text);
 				if (source !== "rag") {
@@ -373,7 +400,7 @@ export default function UserChatPage() {
 					};
 
 					setMessages((prev) => [...prev, botUi]);
-					await persistMessage(sessionId, "bot", reply);
+					await persistMessage(effectiveSessionId, "bot", reply);
 					return;
 				}
 
@@ -400,9 +427,9 @@ export default function UserChatPage() {
 				};
 
 				setMessages((prev) => [...prev.filter((m) => m.id !== typingId), botUi]);
-				await persistMessage(sessionId, "bot", ragReply);
+				await persistMessage(effectiveSessionId, "bot", ragReply);
 			} catch (e) {
-				setError(e instanceof Error ? e.message : String(e));
+				setError(formatHasuraError(e));
 			} finally {
 				setIsSending(false);
 			}
